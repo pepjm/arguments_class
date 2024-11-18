@@ -1,0 +1,22 @@
+{"help":{
+  "description":"generate the 4Eyes approval process and install the needed checkpoint' policies after checking th eapproval\n It doesn't need HPSM",
+  "epilog":"I hope this will help you",
+  "arg":[
+   {"name":"-a,--alternative", "default":true, "help":"the arg help", "required":false, "type":"int"}
+  ,{"name":"-i,--input", "help":"the inputfile", "required":false}
+  ,{"name":"-e,--execute", "default":false, "help":"should it be executed", "required":false, "type":"str2bool"}
+  ,{"name":"--noprint", "help":"no print on the console", "default":"store_false", "action":"store_true"}
+  ,{"name":"--nolog", "help":"no logs are saved", "action":"store_false"}
+  ,{"name":"-u,--user", "help":"user name", "required":false}
+  ,{"name":"-p,--password", "help":"password in base64", "required":false}
+  ,{"name":"--authentication", "help":"authentication token", "required":false}
+  ,{"name":"-b,--base64", "help":"using crypted base64 credential in password", "required":false, "default": false,"action":"store_true"}
+  ,{"name":"-s,--server", "help":"server to access"}
+  ,{"name":"--outputfile", "help":"output", "default":"", "required":false}
+  ,{"name":"--level", "help":"information's level ['NONE','NORMAL','VERBOSE','DEBUG','SILENT']", "required":false,"default":"DEBUG","choices":["NORMAL","VERBOSE","DEBUG","SILENT"]}
+  ,{"name":"--debugfile", "help":"name debug's file (optional)", "required":false}
+  ,{"name":"--folder", "help":"folder (optional)", "default":"","required":false}
+  ,{"name":"--testing,--test", "help":"testing transform install in verify", "required":false,"default": false, "action":"store_true"}
+  ]
+}
+}
