@@ -1,6 +1,5 @@
 #!python3
 #VERSION=0.7
-# ask PEPJ
 import sys, json
 import os
 import io, re
