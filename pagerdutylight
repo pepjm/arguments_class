@@ -1,0 +1,226 @@
+Pagerdutylight
+#!python3
+#VERSION=0.2
+from __future__ import print_function
+import re
+import os
+from datetime import datetime , timedelta
+import time
+import subprocess
+
+from arguments_class import *
+from printoutputdebug_module import *
+import requests
+import json
+from types import SimpleNamespace
+
+severityMapping = [
+        'info',    # NOT CLASSIFIED
+        'info',    # INFORMATIONAL
+        'warning', # WARNING AVERAGE
+        'warning', # MINOR
+        'warning', # CRITICAL
+        'critical' # FATAL HIGH DISASTER
+]
+
+class pagerdutylight:
+    def __init__(self, token="",proxy=None,email="your e-mail",region="eu",out=None):
+        """
+        proxies={
+            "http":proxy_url,
+            "https":proxy_url
+        }
+        """
+        self.token=token
+        self.proxy=proxy
+        self.email=email
+        self.region=region
+        self.headers=self.get_header()
+        self.url=self.get_url_pagerduty()
+        self.out=out
+    def get_header(self):
+        headers = {
+            "Authorization": "Token token="+str(self.token),
+            "Content-Type": "application/json",
+            "From": self.email
+        }
+        return headers
+    def get_url_pagerduty(self,command=""):
+        if command!="" and command[0]!="/": command='/'+command
+        if self.region=="eu":
+            url="https://events.eu.pagerduty.com/v2/enqueue/"+command
+        else:
+            url="https://events.pagerduty.com/v2/enqueue/"+command
+        return url
+
+    def send_pagerduty(self,pd_data={}):
+        response = requests.post(self.url, headers=self.headers, data=json.dumps(pd_data), proxies=self.proxy)
+        return response
+    def do_new_event(self,param):
+        param.event_source=0
+        param.eventvalue=1
+        param.eventupdate=0
+    def do_acknowledge_event(self,param):
+        param.event_source=0
+        param.eventvalue=1
+        param.eventupdate=1
+        param.eventack="Yes"
+    def do_update_event(self,param):
+        # TO CORRECT
+        param.event_source=0
+        param.eventvalue=0
+        param.eventupdate=0
+    def do_close_event(self,param):
+        param.event_source=0
+        param.eventvalue=0
+        param.eventupdate=0
+    def prepare_incident(self,params):
+        status='ok'
+        fields={}
+        fields["routing_key"] = self.token
+        self.out.echo(DEBUG,"params ====>"+str(vars(params)))
+        if params.eventid and ( not isinstance(params.eventid, int) or params.eventid < 1):
+           status='Incorrect value for variable "eventid". The value must be a positive number.'
+        if params.eventname and len(params.eventname) < 1:
+           status='Incorrect value for variable "eventname". The value must be a non-empty string.'
+        securityvalue=params.severity
+        if isinstance(params.severity,int):
+            if ( params.severity<0 and params.severity>5): 
+                status='Incorrect value for variable "severity". The value must be a number 0..5.'
+            else:
+                securityvalue= severityMapping[params.severity]
+        elif not (params.severity in severityMapping):
+           status='Incorrect value for variable "severity". The value must be a number 0..5.'
+        else:
+            securityvalue= severityMapping[params.severity]
+        if params.event_source not in [0, 1, 2, 3]:
+           status='Incorrect "event_source" parameter given: "+str(params["event_source"])+". Must be 0-3.'
+        # Check {EVENT.VALUE} for trigger-based and internal events
+        if params.eventvalue not in [0, 1] and params.event_source in [0, 3]:
+           status='Incorrect "eventvalue" parameter given: "+str(params["eventvalue"])+". Must be 0 (resolve) or 1 (trigger / update).'
+        if params.event_source == 0:
+            if len(params.hostname) < 1:
+               status='Incorrect value for variable "hostname". The value must be a non-empty string.'
+            if params.eventack.lower() not in ['yes', 'no']:
+               status='Incorrect value for variable "eventack". The value must be Yes or No.'
+            if not isinstance(params.eventupdate, int) or not (0 <= params.eventupdate <= 1):
+               status='Incorrect value for variable "eventupdate". The value must be 0 or 1.'
+        fields["dedup_key"] = str(params.eventid)
+        if params.event_source == 1:
+            source = 'Discovery'
+        else:
+            source = params.hostname + ' : ' + params.hostip
+        if (((params.eventvalue == 1) and (params.eventupdate == 0)) or (params.event_source != 0)):
+            fields["event_action"] = 'trigger'
+            fields["payload"] = { "summary": params.eventname, "source": source, "severity": securityvalue }
+            if (params.event_source == 0):
+                if not isinstance(params.triggerid, int) or params.triggerid < 1:
+                    status='Incorrect value for variable "triggerid". The value must be a positive number.'
+                fields["payload"]["custom_details"] = {
+                    'Event date': params.eventdate,
+                    'Event time': params.eventtime,
+                    'Trigger description': params.triggerdesc,
+                    'Trigger opdata': params.triggeropdata,
+                    'Event tags': params.eventtags,
+                    'Event host': params.hostname,
+                    'Event host ip': params.hostip,
+                    'Service': params.service,
+                    'Zone': params.zone,
+                    'Datacenter': params.datacenter,
+                    'Customer': params.customer,
+                            'Owner': params.owner
+                }
+                fields["links"] = [{
+                    "href": self.url + '/tr_events.php?triggerid=' + str(params.triggerid) + '&eventid=' + str(params.eventid),
+                    "text": 'Event link'}]
+            else:
+                fields["payload"]["custom_details"] = { 'Alert message': params.alert_message}
+            fields["client"] = params.client
+            fields["client_url"] = self.url
+        elif ((params.eventvalue == 1) and (params.eventupdate == 1) and (params.eventack.lower() == 'yes')):
+            fields["payload"] = { "summary": params.eventname, "source": source, "severity": securityvalue }
+            fields["event_action"] = 'acknowledge'
+            fields["payload"]["custom_details"] = { 'Service': params.service,'Owner': params.owner }
+        elif (params.eventvalue == 0):
+            fields["payload"] = { "summary": params.eventname, "source": source, "severity": securityvalue }
+            fields["event_action"] = 'resolve'
+            fields["payload.custom_details"] = { 'Service': params.service, 'Owner': params.owner }
+        else:
+            status= 'incorrect values. Update message without ack will not be sent.'
+        return status,fields
+
+if __name__ == "__main__":
+    DEFPREFIX='/.0aMTEST.82.' # create you prefix here example
+    DEFPOSTFIX='#.TEST&3+p' # create you postfix here example
+    DEFINSIDE='/4TEST>$' # create the not used characters here as example
+    DEFBASE=''
+    args=arguments("help_pagerdutylight.json",DEFPREFIX,DEFPOSTFIX,DEFINSIDE)
+    args.setbase64(args.parameters.base64)  # optional
+    out=outputs(level=args.parameters.level,printout=args.doprint
+                 ,debugFileName=args.debug_file,outputFileName=args.output_file
+                 ,logFileName=args.log_file)
+    auth=args.decodebase64PrefixPostfix(args.parameters.authentication)
+    #out.echo(NORMAL,"AUTH="+str(auth))
+    if args.parameters.authentication:
+        out.echo(DEBUG,"using Authentication key:"+str(auth))
+    else:
+        out.echo(DEBUG,"missing base64 encoded Token:")
+    if args.parameters.proxy_url and args.parameters.proxy_url!='':
+        proxy_url=args.parameters.proxy_url
+        proxies={
+            "http":proxy_url,
+            "https":proxy_url
+        }
+    else:
+        proxies=None
+    sess_pd=pagerdutylight(token=auth,email=args.parameters.email,proxy=proxies,out=out)
+    
+    if args.parameters.ack: sess_pd.do_acknowledge_event(args.parameters)
+    if args.parameters.close: sess_pd.do_close_event(args.parameters)
+    data_pd=args.parameters
+    state,incident_data= sess_pd.prepare_incident(data_pd)
+    if incident_data and state=='ok':
+        out.echo(DEBUG,"state="+str(state)+" incident_data=>\n"+out.humanJsonFormat(incident_data,depth=999))
+        #url=get_url_pagerduty(command="",zone="eu")
+        response=sess_pd.send_pagerduty(incident_data)
+        try:
+            json_data = response.json()  # Try parsing the response as JSON
+            is_json=True
+        except ValueError:
+            is_json=False
+        if response.ok and is_json:
+            out.echo(NORMAL,"TEMOPARY Incident created sucessfully TEXT\n"+str(response.text))
+            out.echo(NORMAL,"TEMOPARY Incident created sucessfully FULL response\n"+str(vars(response)))
+            msg="ok\n"
+            if "url" in json_data : msg=msg+'url =>'+str(json_data["url"]+'\n')
+            if "status" in json_data : msg=msg+'status =>'+str(json_data["status"]+'\n')
+            if "message" in json_data : msg=msg+'message =>'+str(json_data["message"]+'\n')
+            if "text" in json_data : msg=msg+'text =>'+str(json_data["text"]+'\n')
+            out.writeOutput('w',msg,out.outputFileName)
+        else:
+            if is_json:
+                out.echo(DEBUG,"Failed response url:"+str(response.url))
+                out.echo(DEBUG,"Failed response header:"+str(response.headers))
+                out.echo(DEBUG,"Failed to create incident TXT =>\n"+str(response.text))
+                out.echo(DEBUG,"TEMOPARY FAILED request JSON DATA =>\n"+str(json_data))
+                out.echo(NORMAL,"status : "+str(json_data["status"]))
+                out.echo(NORMAL,"Error : "+str(json_data["error"]))
+                out.echo(NORMAL,"message : "+str(json_data["message"]))
+                out.echo(NORMAL,"Failed to create incident:"+str(response.message))
+                msg="Error\n"
+                if "url" in json_data : msg=msg+'url =>'+str(json_data["url"]+'\n')
+                if "status" in json_data : msg=msg+'status =>'+str(json_data["status"]+'\n')
+                if "message" in json_data : msg=msg+'message =>'+str(json_data["message"]+'\n')
+                if "error" in json_data : msg=msg+'error =>'+str(json_data["error"]+'\n')
+                if "text" in json_data : msg=msg+'text =>'+str(json_data["text"]+'\n')
+                out.writeOutput('w',msg,out.outputFileName)
+            else:
+                msg="Error\n"
+                msg=msg+str(response)
+                out.writeOutput('w',msg,out.outputFileName)
+    else:
+        out.echo(NORMAL,"Data formatting Error: \n"+str(state))
+        msg="Error\n"
+        msg=msg+"data formatting error."
+        out.writeOutput('w',msg,out.outputFileName)
+
