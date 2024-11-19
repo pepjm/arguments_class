@@ -1,5 +1,5 @@
 {"help":{
-  "description":"generate the 4Eyes approval process and install the needed checkpoint' policies after checking th eapproval\n It doesn't need HPSM",
+  "description":"this is the help of this program .... \nplease modify it",
   "epilog":"I hope this will help you",
   "arg":[
    {"name":"-a,--alternative", "default":true, "help":"the arg help", "required":false, "type":"int"}
